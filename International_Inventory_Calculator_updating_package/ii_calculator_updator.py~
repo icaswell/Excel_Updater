@@ -1,0 +1,333 @@
+#!/opt/local/bin/python
+"""
+@Author: Isaac Caswell
+@Created: 29 August 2014
+
+Updates the international inventory calculator created by Chris Axelson.
+Executes a MySQL script, and writes the resulting table to a single sheet of an
+existing .xlsx file.
+
+
+Usage:
+   python ~/scp_stuff/excel_automation/ii_calculator_updator.py
+
+Using cron to run the script once a month:
+   crontab -e                                                             [this opens the crontab file for editing]
+   i                                                                      [enter insert mode]
+   0 8 1 * * cd /Users/isaac/scp_stuff/excel_automation/ && python ii_calculator_updator.py [copy this line into the file]
+   esc                                                                    [leave insert mode]
+   :x                                                                     [save and quit]
+
+
+[cron troubleshooting: consider setting the path within crontab, i.e.
+PATH=/opt/someApp/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin]
+
+
+IMPORTANT:
+in order for this script ot run, you need certain things installed:
+(Following commands to be entered in command line/terminal. $ symbolizes the prompt.)
+
+--openpyxl: module for reading/writing .xlsx files.
+    -This is easy to install on terminal.  Simply run:
+       $ sudo pip install openpyxl
+
+--MySQLdb: module for running the mysql query.
+    -This is oddly really tricky to install, and I ended up flailing randomly until
+    suddenly it worked.  But if you're more savvy than me, you can follow the steps
+    delineated here:
+    http://stackoverflow.com/questions/1448429/how-to-install-mysqldb-python-data-access-library-to-mysql-on-mac-os-x#1448476
+    This gives ten easy steps to folow to do it.  Unfortunately, I couldn't complete
+    anything past step 3b, but when I ran
+       $ export DYLD_LIBRARY_PATH=/usr/local/mysql/lib/
+    everything magically worked. [the horrible code in the midst of the import statements should deal with this now]
+
+--mysql: In order for the previous req to work, one needs mysql installed.  I accomplished this
+  again in a sort of random fashion, calling
+     $ $bash <(curl -Ls http://git.io/eUx7rg)
+  Which as far as I can tell is hoodoo, but it worked.
+
+--dbupload: This is the module that uploads the file to dropbox.  To install:
+   -go to https://github.com/jncraton/PythonDropboxUploader
+   -click "Download Zip" to download the file
+   -unarchive the file by double clicking on it
+   -cd into the directory this makes, probably named PythonDropboxUploader-master
+       $ cd ~/Downloads/PythonDropboxUploader-master
+   -install (you will need to enter your password):
+       $ sudo python setup.py install
+   -I NEEDED TO COPY DBUPLOAD INTO THE FOLDER THIS SCRIPT WAS IN FOR CRON TO WORK!
+
+--mechanize: this is needed by dbupload.
+     $ sudo pip install mechanize
+
+
+
+more probably ridiculous things to need to install:
+   $ sudo pip install mysql-python
+
+
+
+
+http://dev.mysql.com/doc/refman/5.5/en/macosx-installation-pkg.html
+
+If you're all fancy about knowing about /etc, you might be able to do the MySQLDb thing easier.  E.G.:
+"According to Matt's idea, in mac os x Lion, you should add the following sentence like this to your /etc/profile:
+export DYLD_LIBRARY_PATH=/usr/local/mysql/lib:$DYLD_LIBRARY_PATH"
+
+"""
+
+from collections import defaultdict
+from time import localtime, asctime
+import sys, os #I don't really know what I'm doing here....
+#import MySQLdb
+sys.path.append("/Users/isaac")
+sys.path.append("/Users/isaac/MySQL-python-1.2.4b4/")
+sys.path.append("/Users/isaac/MySQL-python-1.2.4b4/MySQLdb/")
+sys.path.append("/usr/local/mysql/lib/")
+import MySQLdb
+#if you're having trouble with MySQLdb, you're in trouble.  Though in the appendic there's something that worked briefly for me.
+
+from openpyxl.reader.excel import load_workbook
+from openpyxl.cell import get_column_letter
+import MySQLdb
+from dbupload import upload_file
+
+
+#===============================================================================
+# What files are you updating?  What is the sql script are you using?  
+# What is the dropbox email/account you are using?
+#===============================================================================
+
+# If you want to leave the original file untouched (maybe you are testing how
+# the script works and want to be sure you're not overwriting something in your
+# original file), you can specify a separate outfile to write to.  If you just
+# want to update your file, make them the same.
+XL_FILE_TO_UPDATE = r'International Inventory Calculator v7.5.xlsx'
+XL_OUTFILE = XL_FILE_TO_UPDATE
+
+#the cell in which the time of the update is recorded
+UPDATE_DATE_CELL = {'sheet': 'Introduction', 'cell': 'C1'}
+
+DROPBOX_EMAIL = "isaac@wikia-inc.com"
+DROPBOX_PASSWORD = "YayAutomation!"
+DROPBOX_FILE = "/cron_updated_test"#International_inventory_calculator"
+
+
+#Get the date of last month, as an argument to the mysql script
+l = localtime()
+last_month = (l.tm_mon - 2)%12 +1
+last_month_year = l.tm_year
+if last_month ==12:
+    last_month_year -=1
+sql_month_argument = '{0}-{1:02d}-01'.format(last_month_year, last_month)
+
+print sql_month_argument
+
+
+MYSQL_QUERY ="""
+select
+date(time_id),
+country,
+sum(case when device = 'desktop' then sessions*pageviews_per_session end) as 'Desktop Pageviews',
+sum(case when device != 'desktop' then sessions*pageviews_per_session end) as 'Mobile Pageviews'
+#device, sessions*pageviews_per_session as "Pageviews"
+from google_analytics.rollup_audience_geo_device
+where period_id = 3
+and time_id = '{time_id}'
+group by country
+order by country
+""".format(time_id = sql_month_argument)
+
+
+#===============================================================================
+#Some manipulation of filepaths to make them absoluate, for the benefit of cron...
+#===============================================================================
+path_to_this_module = os.path.dirname(sys.argv[0])#'/Users/isaac/scp_stuff/excel_automation/'
+XL_FILE_TO_UPDATE = os.path.join(path_to_this_module, XL_FILE_TO_UPDATE) 
+XL_OUTFILE = os.path.join(path_to_this_module, XL_OUTFILE)
+
+#===============================================================================
+# Connect to the data warehouse and execute the MySQL request
+#===============================================================================
+#connect to the data warehouse
+db = MySQLdb.connect(host="dw-s4",
+                     user="statsdb_ro",
+                      passwd="",
+                      db="statsdb")
+
+#This is the object that executes the script
+c = db.cursor()
+
+#If the query has multiple statements,that should be run sequentially, see the
+# appendixfor expanded code
+c.execute(MYSQL_QUERY)
+country_data = c.fetchall() # the table returned by the mysql
+
+#===============================================================================
+# Figure out the correspondances between cells in the sheet and our data.
+# This section of code looks through every sheet in the excel spreadsheet and
+# constructs a mapping of country name to the cells of the fields that need
+# to be updated for them, i.e. {'Algeria': {'mobile views': 'B49', 'desktop views':
+# 'B24'} .... }
+#===============================================================================
+
+country_names = {t[1].upper() for t in country_data}
+
+wb=load_workbook(XL_FILE_TO_UPDATE)
+sheet_names = wb.get_sheet_names()
+
+country_indices = defaultdict(defaultdict)
+search_criterion = 'country'
+cur_country = ''
+search_column = 'B'
+missing_country_checker = 0
+for sheet_name in sheet_names:
+    ws=wb.get_sheet_by_name(sheet_name)
+    last_row = ws.get_highest_row()
+    for i in range(1, last_row):
+        val =  ws.cell('{0}{1}'.format(search_column, i)).value
+
+        if val == 'DESKTOP':
+            missing_country_checker +=1
+
+
+        if search_criterion == 'country':
+            if val in country_names:
+                cur_country = val
+                country_indices[cur_country]['sheet'] = sheet_name
+                search_criterion = 'desktop views'
+                if missing_country_checker >1:
+                    print "WARNING!! THE COUNTRY BEFORE {0} IS MISLABELED!".format(val)
+                missing_country_checker = 0
+
+        elif search_criterion == 'desktop views':
+            if val == 'Pageviews (most recent from QC/GA)':
+                country_indices[cur_country]['desktop views'] = '{0}{1}'.format(search_column, i+1)
+                search_criterion = 'mobile views'
+
+        elif search_criterion == 'mobile views':
+            if val == 'Pageviews (most recent from QC/GA)':
+                country_indices[cur_country]['mobile views'] = '{0}{1}'.format(search_column, i+1)
+                search_criterion = 'country'
+
+    if missing_country_checker == 0: #note: this is a pretty imperfect check, but it's good enough for so small a project
+        print "Note: sheet {0} has no country data.  If you believe this is an error, check the spelling of the name of the sheet!".format(sheet_name)
+
+#===============================================================================
+# Write to the .xlsx file.
+#===============================================================================
+print '\n'
+countries_not_in_spreadsheet = []
+for country in country_data:
+    country_name = country[1].upper()
+    if country_name in country_indices:
+        ws=wb.get_sheet_by_name(country_indices[country_name]['sheet'])
+        ws.cell(country_indices[country_name]['desktop views']).value = country[2]*10
+        ws.cell(country_indices[country_name]['mobile views']).value = country[3]*10
+    else:
+        countries_not_in_spreadsheet.append(country_name)
+
+print "Note: the following countries, for which we have data, are not in the spreadsheet:"
+print countries_not_in_spreadsheet
+print "\n***If you want any of the above countries to be accounted for, one could \
+write a python script in about 20 minutes to add them all to the sheet, and \
+no modifications would be necessary to this script.***\n"
+
+# Countries missing include Iceland, Guatemala, Kenya, Yemen, Palestine, Puerto Rico, Serbia...
+
+#put a timestamp on the sheet, so readers know when it was last updated:
+ws=wb.get_sheet_by_name(UPDATE_DATE_CELL['sheet'])
+ws.cell(UPDATE_DATE_CELL['cell']).value = asctime()
+
+wb.save(XL_OUTFILE)
+print "wrote to {0}".format(XL_OUTFILE)
+
+
+#===============================================================================
+# Upload to Dropbox
+#===============================================================================
+print "uploading file to dropbox..."
+upload_file(XL_OUTFILE, DROPBOX_FILE, XL_OUTFILE, DROPBOX_EMAIL, DROPBOX_PASSWORD)
+print "Successfully uploaded to Dropbox!"
+
+"""try:
+    upload_file(XL_OUTFILE, DROPBOX_FILE, XL_OUTFILE, DROPBOX_EMAIL, DROPBOX_PASSWORD)
+    print "Successfully uploaded to Dropbox!"
+except Exception as e:
+    print "Uploading to Dropbox failed:"
+    print str(e)
+""" 
+
+
+#===============================================================================
+# APPENDIX: code you probably don't have to worry about, but might be useful someday.
+# Contains: 
+# 0. Attempt to upload autommatically to google drive
+# 1. Code to execute a mysql script with more than one statement.
+#===============================================================================
+
+""""APPENDIX:
+0. Upload to google drive (Buggy in that it needs a manual authentication.)
+
+from pydrive.auth import GoogleAuth
+from pydrive.drive import GoogleDrive
+
+gauth = GoogleAuth()
+
+# If this doesn't work, try the answer proposed here:
+# http://stackoverflow.com/questions/22555433/pydrive-and-google-drive-automate-verification-process
+gauth.LoadCredentialsFile("mycreds.txt")
+if gauth.credentials is None:
+    # Authenticate if they're not there
+    gauth.LocalWebserverAuth()
+elif gauth.access_token_expired:
+    # Refresh them if expired
+    gauth.Refresh()
+else:
+    # Initialize the saved creds
+    gauth.Authorize()
+# Save the current credentials to a file
+gauth.SaveCredentialsFile("mycreds.txt")
+
+drive = GoogleDrive(gauth)
+
+f = drive.CreateFile()
+f.SetContentFile(XL_OUTFILE) # Read local file
+f.Upload() # Upload it
+
+
+1. Running a sql script with multiple statements
+
+# Separate the script into a list of separate commands.
+sqlCommands = MYSQL_QUERY.split(';')
+
+# Sequentially execute every command from the input file,
+# skipping those which fail.
+for command in sqlCommands:
+    try:
+        c.execute(command)
+    except Exception as e:
+        print "Command skipped: ", str(e)
+
+
+2. 
+#FOLLOWING: VOODOO FROM http://xrunhprof.wordpress.com/2012/06/08/ld-library-path-python/
+#TO COMPENSATE FOR THE _MYSQL IMAGE NOT BEING FOUND. I.E. WHAT export DYLD_LIBRARY_PATH=/usr/local/mysql/lib/
+#WOULD FIX NORMALLY
+mymodule_path ="/usr/local/mysql/lib/"
+try:
+    sys.path.append(mymodule_path)
+    import MySQLdb
+except ImportError:
+    print ImportError
+    if sys.platform == 'win32':
+        os.environ['PATH'] = mymodule_path
+    elif sys.platform == 'darwin':
+        os.environ['DYLD_LIBRARY_PATH'] = mymodule_path
+    else:
+        os.environ['LD_LIBRARY_PATH'] = mymodule_path
+    args = [sys.executable]
+    args.extend(sys.argv)
+    os.execv(sys.executable, args)
+# </VOODOO>
+
+"""
