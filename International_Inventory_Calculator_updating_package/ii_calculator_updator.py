@@ -4,19 +4,19 @@
 @Created: 29 August 2014
 
 Updates the international inventory calculator created by Chris Axelson.
-Executes a MySQL script, and writes the resulting table to a single sheet of an
-existing .xlsx file.
+Queries the data Warehouse with mysql, and writes to the relevant .xlxs file.
 
 
 Usage:
-   python ~/scp_stuff/excel_automation/ii_calculator_updator.py
+   python ii_calculator_updator.py
 
 Using cron to run the script once a month:
-   crontab -e                                                             [this opens the crontab file for editing]
-   i                                                                      [enter insert mode]
-   0 8 1 * * cd /Users/isaac/scp_stuff/excel_automation/International_Inventory_Calculator_updating_package && python ii_calculator_updator.py [copy this line into the file]
-   esc                                                                    [leave insert mode]
-   :x                                                                     [save and quit]
+   crontab -e                                              [this opens the crontab file for editing]
+   i                                                       [enter insert mode]
+   n                                                       [copy the following line into the file, with the actual filepath (probably starting with Users/...):]
+   0 8 1 * * cd /Full/Path/to/International_Inventory_Calculator_updating_package && python ii_calculator_updator.py
+   esc                                                     [leave insert mode]
+   :x                                                      [save and quit]
 
 
 [cron troubleshooting: consider setting the path within crontab, i.e.
@@ -24,73 +24,20 @@ PATH=/opt/someApp/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/b
 
 
 IMPORTANT:
-in order for this script ot run, you need certain things installed:
-(Following commands to be entered in command line/terminal. $ symbolizes the prompt.)
-
---openpyxl: module for reading/writing .xlsx files.
-    -This is easy to install on terminal.  Simply run:
-       $ sudo pip install openpyxl
-
---MySQLdb: module for running the mysql query.
-    -This is oddly really tricky to install, and I ended up flailing randomly until
-    suddenly it worked.  But if you're more savvy than me, you can follow the steps
-    delineated here:
-    http://stackoverflow.com/questions/1448429/how-to-install-mysqldb-python-data-access-library-to-mysql-on-mac-os-x#1448476
-    This gives ten easy steps to folow to do it.  Unfortunately, I couldn't complete
-    anything past step 3b, but when I ran
-       $ export DYLD_LIBRARY_PATH=/usr/local/mysql/lib/
-    everything magically worked. [the horrible code in the midst of the import statements should deal with this now]
-
---mysql: In order for the previous req to work, one needs mysql installed.  I accomplished this
-  again in a sort of random fashion, calling
-     $ $bash <(curl -Ls http://git.io/eUx7rg)
-  Which as far as I can tell is hoodoo, but it worked.
-
---dbupload: This is the module that uploads the file to dropbox.  To install:
-   -go to https://github.com/jncraton/PythonDropboxUploader
-   -click "Download Zip" to download the file
-   -unarchive the file by double clicking on it
-   -cd into the directory this makes, probably named PythonDropboxUploader-master
-       $ cd ~/Downloads/PythonDropboxUploader-master
-   -install (you will need to enter your password):
-       $ sudo python setup.py install
-   -I NEEDED TO COPY DBUPLOAD INTO THE FOLDER THIS SCRIPT WAS IN FOR CRON TO WORK!
-
---mechanize: this is needed by dbupload.
-     $ sudo pip install mechanize
-
-
-
-more probably ridiculous things to need to install:
-   $ sudo pip install mysql-python
-
-
-
-
-http://dev.mysql.com/doc/refman/5.5/en/macosx-installation-pkg.html
-
-If you're all fancy about knowing about /etc, you might be able to do the MySQLDb thing easier.  E.G.:
-"According to Matt's idea, in mac os x Lion, you should add the following sentence like this to your /etc/profile:
-export DYLD_LIBRARY_PATH=/usr/local/mysql/lib:$DYLD_LIBRARY_PATH"
-
+in order for this script to run, you need certain things installed.  Since they are a hassle, I have 
+instead included all the relevant packages in this package.  I hope this doesn't cause problems. If 
+for some reason you need to install them yourself, look in the appendix for instructions.  For reference,
+The modules are: openpyxl, mysql, MySQLdb, dbupload, and mechanize.
 """
 
 from collections import defaultdict
 from time import localtime, asctime
-import sys, os #I don't really know what I'm doing here....
-#import MySQLdb
-sys.path.append("/Users/isaac")
-sys.path.append("/Users/isaac/MySQL-python-1.2.4b4/")
-sys.path.append("/Users/isaac/MySQL-python-1.2.4b4/MySQLdb/")
-sys.path.append("/usr/local/mysql/lib/")
-import MySQLdb
-#if you're having trouble with MySQLdb, you're in trouble.  Though in the appendic there's something that worked briefly for me.
+import sys, os
 
 from openpyxl.reader.excel import load_workbook
 from openpyxl.cell import get_column_letter
 import MySQLdb
 from dbupload import upload_file
-
 
 #===============================================================================
 # What files are you updating?  What is the sql script are you using?  
@@ -210,7 +157,7 @@ for sheet_name in sheet_names:
                 search_criterion = 'country'
 
     if missing_country_checker == 0: #note: this is a pretty imperfect check, but it's good enough for so small a project
-        print "Note: sheet {0} has no country data.  If you believe this is an error, check the spelling of the name of the sheet!".format(sheet_name)
+        print "Note: sheet \'{0}\' has no country data.  If you believe this is an error, check the spelling of the name of the sheet!".format(sheet_name)
 
 #===============================================================================
 # Write to the .xlsx file.
@@ -249,23 +196,19 @@ print "uploading file to dropbox..."
 upload_file(XL_OUTFILE, DROPBOX_FILE, XL_OUTFILE, DROPBOX_EMAIL, DROPBOX_PASSWORD)
 print "Successfully uploaded to Dropbox!"
 
-"""try:
-    upload_file(XL_OUTFILE, DROPBOX_FILE, XL_OUTFILE, DROPBOX_EMAIL, DROPBOX_PASSWORD)
-    print "Successfully uploaded to Dropbox!"
-except Exception as e:
-    print "Uploading to Dropbox failed:"
-    print str(e)
-""" 
 
 
+"""
 #===============================================================================
 # APPENDIX: code you probably don't have to worry about, but might be useful someday.
 # Contains: 
 # 0. Attempt to upload autommatically to google drive
 # 1. Code to execute a mysql script with more than one statement.
+# 2. code to try to fix a "_mysql image not found" error.
+# 3. Instructions for installing dependencies, if the ones I included in the package fail
 #===============================================================================
 
-""""APPENDIX:
+
 0. Upload to google drive (Buggy in that it needs a manual authentication.)
 
 from pydrive.auth import GoogleAuth
@@ -312,7 +255,9 @@ for command in sqlCommands:
 2. 
 #FOLLOWING: VOODOO FROM http://xrunhprof.wordpress.com/2012/06/08/ld-library-path-python/
 #TO COMPENSATE FOR THE _MYSQL IMAGE NOT BEING FOUND. I.E. WHAT export DYLD_LIBRARY_PATH=/usr/local/mysql/lib/
-#WOULD FIX NORMALLY
+#WOULD FIX NORMALLY.  Put in the midst of the imports.
+
+
 mymodule_path ="/usr/local/mysql/lib/"
 try:
     sys.path.append(mymodule_path)
@@ -329,5 +274,58 @@ except ImportError:
     args.extend(sys.argv)
     os.execv(sys.executable, args)
 # </VOODOO>
+
+
+
+3. Installing dependencies:
+(Following commands to be entered in command line/terminal. $ symbolizes the prompt.)
+
+--openpyxl: module for reading/writing .xlsx files.
+    -This is easy to install on terminal.  Simply run:
+       $ sudo pip install openpyxl
+
+--MySQLdb: module for running the mysql query.
+    -This is oddly really tricky to install, and I ended up flailing randomly until
+    suddenly it worked.  But if you're more savvy than me, you can follow the steps
+    delineated here:
+    http://stackoverflow.com/questions/1448429/how-to-install-mysqldb-python-data-access-library-to-mysql-on-mac-os-x#1448476
+    This gives ten easy steps to folow to do it.  Unfortunately, I couldn't complete
+    anything past step 3b, but when I ran
+       $ export DYLD_LIBRARY_PATH=/usr/local/mysql/lib/
+    everything magically worked.
+
+--mysql: In order for the previous req to work, one needs mysql installed.  I accomplished this
+  again in a sort of random fashion, calling
+     $ $bash <(curl -Ls http://git.io/eUx7rg)
+  Which as far as I can tell is hoodoo, but it worked.
+
+--dbupload: This is the module that uploads the file to dropbox.  To install:
+   -go to https://github.com/jncraton/PythonDropboxUploader
+   -click "Download Zip" to download the file
+   -unarchive the file by double clicking on it
+   -cd into the directory this makes, probably named PythonDropboxUploader-master
+       $ cd ~/Downloads/PythonDropboxUploader-master
+   -install (you will need to enter your password):
+       $ sudo python setup.py install
+   -I NEEDED TO COPY DBUPLOAD INTO THE FOLDER THIS SCRIPT WAS IN FOR CRON TO WORK!
+
+--mechanize: this is needed by dbupload.
+     $ sudo pip install mechanize
+
+
+more probably ridiculous things to need to install:
+   $ sudo pip install mysql-python
+
+
+
+
+http://dev.mysql.com/doc/refman/5.5/en/macosx-installation-pkg.html
+
+If you're all fancy about knowing about /etc, you might be able to do the MySQLDb thing easier.  E.G.:
+"According to Matt's idea, in mac os x Lion, you should add the following sentence like this to your /etc/profile:
+export DYLD_LIBRARY_PATH=/usr/local/mysql/lib:$DYLD_LIBRARY_PATH"
+
+
+
 
 """

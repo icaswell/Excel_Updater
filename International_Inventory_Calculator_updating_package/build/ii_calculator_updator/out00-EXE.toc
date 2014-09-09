@@ -1,0 +1,9 @@
+('/Users/isaac/scp_stuff/excel_automation/International_Inventory_Calculator_updating_package/build/ii_calculator_updator/ii_calculator_updator',
+ True,
+ False,
+ None,
+ None,
+ [],
+ None,
+ False,
+ 1410218382)
